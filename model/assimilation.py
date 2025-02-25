@@ -429,12 +429,9 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
             dtw_matrix = tf.tensor_scatter_nd_update(dtw_matrix, indices, updates)
             return dtw_matrix
 
-        # ループでDTW行列を計算
-        _, dtw_matrix = tf.while_loop(
-            lambda i, _: i <= seq_len,
-            lambda i, dtw_matrix: (i + 1, dtw_step(i, dtw_matrix)),
-            [tf.constant(1), dtw_matrix]
-        )
+        # DTW行列を計算
+        for i in tf.range(1, seq_len + 1):
+            dtw_matrix = dtw_step(i, dtw_matrix)
 
         # 実際のバッチサイズに基づき結果を抽出
         dtw_distance = dtw_matrix[:batch_size, -1, -1]
