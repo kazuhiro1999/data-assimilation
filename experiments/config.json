@@ -1,0 +1,36 @@
+{
+    "train_files": [
+        "data/motion_daily(1).pkl",
+        "data/motion_dance(1).pkl",
+        "data/motion_sport(1).pkl"
+    ],
+    "test_files": [
+        "data/motion_daily(2).pkl",
+        "data/motion_dance(2).pkl",
+        "data/motion_sport(2).pkl"
+    ],
+    "dataset_info": {
+        "type": "IOBT+TDPT",
+        "input_seq_length": 30,
+        "output_seq_length": 12,
+        "frame_rate": 30,
+        "stride": 3,
+        "validation_split": 0.2,
+        "preprocessing": {
+            "centering": true,
+            "augmentation": {
+                "rotation_range": [-45, -30, -15, 0, 15, 30, 45],
+                "scaling_range": [0.8, 1.2],
+                "noise_std_dev": 0.001
+            }
+        },
+        "parameters": {
+            "delay": 0.4
+        }
+    },
+    "batch_size": 64,
+    "latent_dim": 64,
+    "num_joints": 18,
+    "num_upperbody_joints": 10,
+    "epochs": 30
+}
