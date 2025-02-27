@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers, Model
+from tensorflow.keras import layers
 
 from model.wae import GCNLayer
 from utils.metrics import MPJPEError, MPJPEErrorFrame
@@ -251,7 +251,7 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
             initial_value=tf.fill([1, 1, latent_dim], -5.0), trainable=True, dtype=tf.float32
         )
         
-        self.latent_nll_weight = 0.001  # 潜在空間でのNLL
+        self.latent_nll_weight = 0.001  # NLL in latent space
         self.dtw_weight = 0.1
         self.mse_weight = 100.0
         
@@ -329,7 +329,7 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
             # 4.現在の状態を選択的に更新
             current_state = tf.concat([latent_mean, latent_logvar], axis=-1)  # (batch_size, 1, latent_dim * 2)
             updated_state = tf.concat([updated_mean, updated_logvar], axis=-1)  # (batch_size, 1, latent_dim * 2)
-            gates = self.gate_layer([current_state, latent_obs], training=training)  # => (batch_size, 1, latent_dim)
+            gates = self.gate_layer([current_state, updated_state], training=training)  # => (batch_size, 1, latent_dim)
             
             latent_mean = (1 - gates) * latent_mean + gates * updated_mean
             latent_logvar = tf.math.reduce_logsumexp(tf.stack([
@@ -375,7 +375,7 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
     
     @tf.function
     def compute_latent_nll_loss(self, latent_true, latent_pred_mean, latent_pred_log_var, log_qz):
-        """潜在空間での負の対数尤度損失"""
+        """Negative Log-Liklihood in Latent Space"""
         squared_error = tf.square(latent_true - latent_pred_mean)
         variance = tf.exp(latent_pred_log_var) + 1e-6
 
@@ -384,41 +384,35 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
     
     @tf.function
     def compute_dtw_loss(self, y_true, y_pred, max_batch_size=64):
-        """Dynamic Time Warping損失を計算"""
-        # パラメータ設定
-        seq_len = tf.shape(y_true)[1]  # シーケンス長を動的に取得
-        feature_dim = tf.shape(y_true)[2]  # 特徴次元数
-
-        # バッチサイズの動的取得
+        """Dynamic Time Warping"""       
         batch_size = tf.shape(y_true)[0]
-
-        # 入力のリシェイプ
+        seq_len = tf.shape(y_true)[1]  # Sequence length
+        
         y_true = tf.reshape(y_true, [batch_size, seq_len, -1])
         y_pred = tf.reshape(y_pred, [batch_size, seq_len, -1])
 
-        # DTW行列の初期化
+        # Initialize matrix
         dtw_matrix = tf.fill(
             [max_batch_size, seq_len + 1, seq_len + 1],
             tf.constant(tf.float32.max, dtype=tf.float32)
         )
-        # (0, 0)位置を初期化
+
         dtw_matrix = tf.tensor_scatter_nd_update(
             dtw_matrix,
             tf.constant([[i, 0, 0] for i in range(max_batch_size)]),
             tf.zeros(max_batch_size, dtype=tf.float32)
         )
 
-        # ヘルパー関数: DTW行列の更新
+        # function: Update DTW Matrix
         def dtw_step(i, dtw_matrix):
-            # 現在のコストを計算
+            # Calculate cost
             cost = tf.reduce_sum(tf.square(y_pred[:, i - 1] - y_true[:, i - 1]), axis=-1)  # [batch_size]
 
-            # 更新する位置と値を取得
             indices = tf.concat(
                 [
-                    tf.expand_dims(tf.range(batch_size), axis=1),  # バッチサイズ分のインデックス
-                    tf.fill([batch_size, 1], i),                  # i 番目のインデックス
-                    tf.fill([batch_size, 1], i)                   # i 番目のインデックス
+                    tf.expand_dims(tf.range(batch_size), axis=1),  
+                    tf.fill([batch_size, 1], i),                  
+                    tf.fill([batch_size, 1], i)                   
                 ],
                 axis=1
             )
@@ -429,11 +423,10 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
             dtw_matrix = tf.tensor_scatter_nd_update(dtw_matrix, indices, updates)
             return dtw_matrix
 
-        # DTW行列を計算
+        # Calculate DTW Matrix
         for i in tf.range(1, seq_len + 1):
             dtw_matrix = dtw_step(i, dtw_matrix)
 
-        # 実際のバッチサイズに基づき結果を抽出
         dtw_distance = dtw_matrix[:batch_size, -1, -1]
         return dtw_distance
     
@@ -517,8 +510,8 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
             "wae": keras.utils.serialize_keras_object(self.wae),  
             "time_stepping_model": keras.utils.serialize_keras_object(self.time_stepping_model),
             "latent_dim": self.latent_dim,
-            "input_seq_len": self.input_seq_len,
-            "output_seq_len": self.output_seq_len,
+            "context_window": self.context_window,
+            "prediction_steps": self.prediction_steps,
             "num_joints": self.num_joints
         })
         return config
@@ -526,11 +519,11 @@ class DeepLatentSpaceAssimilationModel(keras.Model):
     @classmethod
     def from_config(cls, config):
         """ モデルの設定をロードするためのメソッド """
-        wae = keras.utils.deserialize_keras_object(config.pop("wae"))  # サブモデルをデシリアライズ
+        wae = keras.utils.deserialize_keras_object(config.pop("wae"))  # Deserialize Sub Model
         time_stepping_model = keras.utils.deserialize_keras_object(config.pop("time_stepping_model"))
 
         return cls(
             wae=wae,
             time_stepping_model=time_stepping_model,
-            **config  # ここで `latent_dim`, `input_seq_len` などの情報を渡す
+            **config 
         )

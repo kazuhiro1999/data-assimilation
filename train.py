@@ -14,7 +14,7 @@ from utils.metrics import calc_mpjpe_error
 from utils.visualization import draw_3d_pose
 
 
-# シード固定
+# Fix seed
 seed = 42
 np.random.seed(seed)
 tf.random.set_seed(seed)
@@ -22,44 +22,45 @@ tf.random.set_seed(seed)
 
 if __name__ == '__main__':
 
-    # 設定ファイルの読み込み
+    # Load configuration file
     with open("experiments/config.json", "r") as f:
         config = json.load(f)
 
-    # 訓練・テストデータのパス
+    # Paths for training and test data (.pkl)
     TRAIN_FILES = config["train_files"]
     TEST_FILES = config["test_files"]
 
-    # データセット情報
+    # Dataset information
     DATASET_INFO = config["dataset_info"]
 
-    # ハイパーパラメータ
-    batch_size = config["batch_size"]
-    latent_dim = config["latent_dim"]
-    num_joints = config["num_joints"]
-    num_upperbody_joints = config["num_upperbody_joints"]
-    epochs = config["epochs"]
+    # Hyperparameters
+    context_window = DATASET_INFO.get("input_seq_length")
+    prediction_steps = DATASET_INFO.get("output_seq_length")
+    num_joints = config.get("num_joints")
+    num_upperbody_joints = config.get("num_upperbody_joints")
+    latent_dim = config.get("latent_dim")
+    batch_size = config.get("batch_size", 32)
+    learning_rate = config.get("learning_rate", 1e-4)
+    epochs = config.get("epochs", 10)
 
-    # コンテキストウィンドウと予測ステップ
-    context_window = DATASET_INFO["input_seq_length"]
-    prediction_steps = DATASET_INFO["output_seq_length"]
+    wae_model_path = config.get("wae_model_path")
+    time_stepping_model_path = config.get("time_stepping_model_path")
 
-    # データローダー作成
+    # Setup data loader
     train_dataloader = MotionDataLoader(TRAIN_FILES)
     test_dataloader = MotionDataLoader(TEST_FILES)
 
-    # データセット作成
+    # Create dataset
     train_generator = AssimilationDataGenerator(train_dataloader)
     train_dataset = train_generator.create_dataset(DATASET_INFO)
 
     X_past_train, X_obs_train, Y_train = train_dataset.get('X_past'), train_dataset.get('X_obs'), train_dataset.get('Y')
     X_past_valid, X_obs_valid, Y_valid = train_dataset.get('X_past_sub'), train_dataset.get('X_obs_sub'), train_dataset.get('Y_sub')
 
-    # データセットのサイズ表示
     print(f"Train Dataset X_past:{X_past_train.shape}, X_obs:{X_obs_train.shape}, Y:{Y_train.shape}")
     print(f"Validation Dataset X_past:{X_past_valid.shape}, X_obs:{X_obs_valid.shape}, Y:{Y_valid.shape}")
 
-    # 可視化 (プロットを画像として保存)
+    # Visualization (save example data as image)
     os.makedirs("output", exist_ok=True)
     n = 6000
     j = FULL_BODY_KEYS.index('RightHand')
@@ -71,11 +72,11 @@ if __name__ == '__main__':
     plt.savefig("output/training_data_plot.png")
     plt.close()
 
-    # 事前学習済みモデルの読み込み
-    wae_model = keras.models.load_model("pretrained/pose_autoencoder.keras", custom_objects={"WAE": WAE})  
-    time_stepping_model = keras.models.load_model("pretrained/time_stepping_transformer.keras", custom_objects={"VariationalTimeSteppingTransformerNF": VariationalTimeSteppingTransformerNF})
+    # Load pre-trained models
+    wae_model = keras.models.load_model(wae_model_path, custom_objects={"WAE": WAE})  
+    time_stepping_model = keras.models.load_model(time_stepping_model_path, custom_objects={"VariationalTimeSteppingTransformerNF": VariationalTimeSteppingTransformerNF})
 
-    # モデル構築
+    # Build model
     model = DeepLatentSpaceAssimilationModel(
         wae=wae_model, 
         time_stepping_model=time_stepping_model, 
@@ -87,7 +88,7 @@ if __name__ == '__main__':
 
     model.build(input_shape=(None, context_window, num_joints, 3))
 
-    # ダミーデータでモデルビルド確認
+    # Check model with dummy data
     dummy_input = [tf.random.uniform((1, context_window, num_joints, 3)), 
                    tf.random.uniform((1, prediction_steps, num_upperbody_joints, 3))]
     dummy_output = model(dummy_input)
@@ -95,12 +96,11 @@ if __name__ == '__main__':
     #print(dummy_output.shape)
     #model.summary()
 
-    # モデルコンパイル
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=5e-4, amsgrad=True),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate, amsgrad=True),
     )
 
-    # コールバック
+    # Callbacks
     os.makedirs("checkpoints", exist_ok=True)
     callbacks = [
         tf.keras.callbacks.ReduceLROnPlateau(monitor='loss', factor=0.5, patience=5, min_lr=1e-6),
@@ -109,7 +109,7 @@ if __name__ == '__main__':
                                            monitor="val_mpjpe_error", save_best_only=True, save_weights_only=False, mode="min")
     ]
 
-    # 学習実行
+    # Start training
     print("Training started...")
     history = model.fit(
         [X_past_train, X_obs_train], Y_train, 
@@ -117,11 +117,11 @@ if __name__ == '__main__':
         batch_size=batch_size, 
         epochs=epochs, 
         shuffle=True, 
-        verbose=1,  # tqdmは不要
+        verbose=1,  
         callbacks=callbacks
     )
 
-    # 学習曲線のプロットと保存
+    # Plot and save learning curves
     metrics = ["dtw_loss", "latent_nll", "loss", "mpjpe_error"]
     fig, ax = plt.subplots(2, 2, figsize=(10, 7))
 
@@ -134,7 +134,7 @@ if __name__ == '__main__':
     plt.savefig("output/training_history.png")
     plt.close()
 
-    # モデルの保存
+    # Save model
     model_save_path = f"pretrained/dlsa_model_{datetime.now().strftime('%Y%m%d_%H%M%S')}.keras"
     model.save(model_save_path)
     print(f"Model saved to: {model_save_path}")

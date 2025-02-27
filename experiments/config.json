@@ -28,9 +28,12 @@
             "delay": 0.4
         }
     },
+    "wae_model_path": "pretrained/pose_autoencoder.keras",
+    "time_stepping_model_path": "pretrained/time_stepping_transformer.keras",
     "batch_size": 64,
     "latent_dim": 64,
     "num_joints": 18,
     "num_upperbody_joints": 10,
-    "epochs": 30
+    "epochs": 30,
+    "learning_rate": 5e-4
 }
